@@ -1,15 +1,15 @@
 package db
 
 import (
-	"bytes"
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"os"
 
-	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 
 	"github.com/metrics/models"
+	"github.com/pkg/errors"
 )
 
 type FileDb struct {
@@ -33,37 +33,38 @@ func (f *FileDb) checkConnection() error {
 }
 
 func (f *FileDb) SaveMetrics(metrics []*models.Metric) error {
-	var metricsBuffer bytes.Buffer
+	file, err := os.OpenFile(
+		f.filePath,
+		os.O_APPEND|os.O_CREATE|os.O_WRONLY,
+		0644,
+	)
+
+	if err != nil {
+		return errors.WithMessage(err, "cannot open db connection")
+	}
+	defer func() {
+		if err := file.Close(); err != nil {
+			log.Errorf("Cannot close db connection. Err: %s", err)
+		}
+	}()
+
+	writer := bufio.NewWriter(file)
 	for _, metric := range metrics {
 		metricJson, err := json.Marshal(metric)
 		if err != nil {
 			return errors.WithMessage(err, fmt.Sprintf("cannot convert metric %v to json format", metric))
 		}
 
-		if _, err := metricsBuffer.Write(metricJson); err != nil {
+		if _, err := writer.Write(metricJson); err != nil {
 			return errors.WithMessage(err, fmt.Sprintf("cannot save metric %v to db", metric))
 		}
-		if _, err := metricsBuffer.WriteString("\n"); err != nil {
+		if _, err := writer.WriteString("\n"); err != nil {
 			return errors.WithMessage(err, fmt.Sprintf("cannot save metric %v to db", metric))
 		}
 	}
-	log.Debugf("Metrics to save: %s", metricsBuffer.String())
 
-	file, err := os.OpenFile(
-		f.filePath,
-		os.O_APPEND|os.O_CREATE|os.O_WRONLY,
-		0644,
-	)
-	if err != nil {
-		return errors.WithMessage(err, "cannot open db connection")
-	}
-
-	if _, err := file.Write(metricsBuffer.Bytes()); err != nil {
-		return errors.WithMessage(err, fmt.Sprintf("cannot save metrics %v to db", metrics))
-	}
-
-	if err := file.Close(); err != nil {
-		return errors.WithMessage(err, fmt.Sprintf("cannot close db connection after the metrics writing"))
+	if err := writer.Flush(); err != nil {
+		return errors.WithMessage(err, fmt.Sprintf("cannot write metrics to db"))
 	}
 
 	return nil
